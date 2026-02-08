@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Details view with sortable and customizable columns
 struct FileDetailsView: View {
@@ -11,10 +12,13 @@ struct FileDetailsView: View {
     let selectedItems: Set<FileItem>
     let onSelect: (FileItem) -> Void
     let onOpen: (FileItem) -> Void
+    var onDelete: ((FileItem) -> Void)? = nil
+    var onRename: ((FileItem) -> Void)? = nil
     
     @StateObject private var columnConfig = ColumnConfiguration()
     @State private var sortOrder = [KeyPathComparator(\FileItem.name)]
     @State private var showingColumnPicker = false
+    @State private var tableSelection: Set<UUID> = []
     
     var sortedItems: [FileItem] {
         items.sorted(using: sortOrder)
@@ -44,8 +48,8 @@ struct FileDetailsView: View {
             
             Divider()
             
-            // Table
-            Table(sortedItems, selection: .constant(selectedItemIDs), sortOrder: $sortOrder) {
+            // Table with two-way selection sync
+            Table(sortedItems, selection: $tableSelection, sortOrder: $sortOrder) {
                 // Name column (always visible)
                 TableColumn("Name") { item in
                     HStack(spacing: 6) {
@@ -54,6 +58,13 @@ struct FileDetailsView: View {
                             .frame(width: 16)
                         Text(item.name)
                     }
+                    .onDrag {
+                        if item.url.isFileURL {
+                            return NSItemProvider(object: item.url as NSURL)
+                        }
+                        return NSItemProvider()
+                    }
+                    .contextMenu { itemContextMenu(for: item) }
                 }
                 .width(min: DetailColumn.name.width.min,
                        ideal: DetailColumn.name.width.ideal,
@@ -131,22 +142,51 @@ struct FileDetailsView: View {
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
             .onTapGesture(count: 2) {
-                if let first = selectedItems.first {
-                    onOpen(first)
+                if let firstID = tableSelection.first,
+                   let item = items.first(where: { $0.id == firstID }) {
+                    onOpen(item)
                 }
             }
-            .onChange(of: selectedItemIDs) { oldValue, newValue in
-                let newlySelected = newValue.subtracting(oldValue)
-                if let id = newlySelected.first,
-                   let item = items.first(where: { $0.id == id }) {
-                    onSelect(item)
+            // Sync Table selection → viewModel
+            .onChange(of: tableSelection) { _, newValue in
+                for item in items {
+                    let isInTable = newValue.contains(item.id)
+                    let isInParent = selectedItems.contains(item)
+                    if isInTable != isInParent {
+                        onSelect(item)
+                    }
+                }
+            }
+            // Sync viewModel selection → Table
+            .onChange(of: selectedItems) { _, newValue in
+                let newIDs = Set(newValue.map { $0.id })
+                if newIDs != tableSelection {
+                    tableSelection = newIDs
                 }
             }
         }
     }
     
-    private var selectedItemIDs: Set<FileItem.ID> {
-        Set(selectedItems.map { $0.id })
+    @ViewBuilder
+    private func itemContextMenu(for item: FileItem) -> some View {
+        Button { onOpen(item) } label: {
+            Label("Open", systemImage: "arrow.right.circle")
+        }
+        Divider()
+        Button { onRename?(item) } label: {
+            Label("Rename…", systemImage: "pencil")
+        }
+        Divider()
+        Button(role: .destructive) { onDelete?(item) } label: {
+            Label("Move to Trash", systemImage: "trash")
+        }
+        Divider()
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(item.url.path, forType: .string)
+        } label: {
+            Label("Copy Path", systemImage: "doc.on.doc")
+        }
     }
     
     private var columnPickerView: some View {
@@ -160,7 +200,7 @@ struct FileDetailsView: View {
                     get: { columnConfig.isVisible(column) },
                     set: { _ in columnConfig.toggle(column) }
                 ))
-                .disabled(column == .name) // Name always visible
+                .disabled(column == .name)
             }
         }
         .padding()

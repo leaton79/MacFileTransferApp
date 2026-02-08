@@ -4,13 +4,16 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Grid view showing files as large icons
 struct FileIconView: View {
     let items: [FileItem]
     let selectedItems: Set<FileItem>
-    let onSelect: (FileItem) -> Void
+    let onSelect: (FileItem, Bool) -> Void
     let onOpen: (FileItem) -> Void
+    var onDelete: ((FileItem) -> Void)? = nil
+    var onRename: ((FileItem) -> Void)? = nil
     
     let columns = [
         GridItem(.adaptive(minimum: 100, maximum: 120), spacing: 16)
@@ -21,13 +24,11 @@ struct FileIconView: View {
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(items) { item in
                     VStack(spacing: 8) {
-                        // Large icon
                         Image(systemName: item.iconName)
                             .font(.system(size: 48))
                             .foregroundColor(item.isDirectory ? .blue : .primary)
                             .frame(width: 80, height: 60)
                         
-                        // Name
                         Text(item.name)
                             .font(.caption)
                             .lineLimit(2)
@@ -41,15 +42,47 @@ struct FileIconView: View {
                                   Color.accentColor.opacity(0.2) : Color.clear)
                     )
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        onSelect(item)
+                    .gesture(
+                        TapGesture(count: 2).onEnded { onOpen(item) }
+                    )
+                    .simultaneousGesture(
+                        TapGesture(count: 1).onEnded {
+                            let cmdHeld = NSEvent.modifierFlags.contains(.command)
+                            onSelect(item, cmdHeld)
+                        }
+                    )
+                    .onDrag {
+                        if item.url.isFileURL {
+                            return NSItemProvider(object: item.url as NSURL)
+                        }
+                        return NSItemProvider()
                     }
-                    .onTapGesture(count: 2) {
-                        onOpen(item)
-                    }
+                    .contextMenu { itemContextMenu(for: item) }
                 }
             }
             .padding()
+        }
+    }
+    
+    @ViewBuilder
+    private func itemContextMenu(for item: FileItem) -> some View {
+        Button { onOpen(item) } label: {
+            Label("Open", systemImage: "arrow.right.circle")
+        }
+        Divider()
+        Button { onRename?(item) } label: {
+            Label("Rename…", systemImage: "pencil")
+        }
+        Divider()
+        Button(role: .destructive) { onDelete?(item) } label: {
+            Label("Move to Trash", systemImage: "trash")
+        }
+        Divider()
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(item.url.path, forType: .string)
+        } label: {
+            Label("Copy Path", systemImage: "doc.on.doc")
         }
     }
 }

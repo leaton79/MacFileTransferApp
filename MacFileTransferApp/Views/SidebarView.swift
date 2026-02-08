@@ -7,6 +7,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
+    @ObservedObject var mtpService: MTPService
     
     @State private var commonLocations: [FileItem] = []
     @State private var volumes: [FileItem] = []
@@ -52,12 +53,70 @@ struct SidebarView: View {
                         .font(.caption)
                 }
             }
+            
+            // ── NEW: Android Devices Section ──
+            Section("Android Devices") {
+                if mtpService.isScanning {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Scanning…")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+                
+                ForEach(mtpService.detectedDevices) { device in
+                                    Button(action: {
+                                        viewModel.connectToMTPDevice(device, service: mtpService)
+                                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "apps.iphone")
+                                .foregroundColor(.green)
+                                .frame(width: 20)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(device.displayName)
+                                    .foregroundColor(.primary)
+                                if let storage = device.storageInfo.first {
+                                    Text("\(storage.freeFormatted) free")
+                                        .foregroundColor(.secondary)
+                                        .font(.caption2)
+                                }
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                
+                if !mtpService.isScanning && mtpService.detectedDevices.isEmpty {
+                    Text("No Android devices")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
+                
+                // Rescan button
+                Button(action: {
+                    mtpService.scanForDevices()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption)
+                        Text("Scan for Devices")
+                            .font(.caption)
+                    }
+                    .foregroundColor(.blue)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+            }
+            // ── END: Android Devices Section ──
         }
         .listStyle(.sidebar)
         .frame(minWidth: 180, idealWidth: 200)
         .onAppear {
             loadLocations()
             loadVolumes()
+            mtpService.scanForDevices()
         }
         .onChange(of: volumes.count) { oldValue, newValue in
             // Refresh when drives are mounted/unmounted
@@ -72,7 +131,6 @@ struct SidebarView: View {
     private func loadVolumes() {
         let fileService = FileSystemService.shared
         volumes = fileService.getVolumes().filter { volume in
-            // Filter out the main system volume
             !volume.url.path.hasPrefix("/System/Volumes")
         }
     }

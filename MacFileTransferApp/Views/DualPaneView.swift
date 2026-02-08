@@ -8,16 +8,17 @@ import SwiftUI
 /// Main dual-pane file browser layout
 struct DualPaneView: View {
     @StateObject private var leftPane = FileBrowserViewModel()
-    @StateObject private var rightPane = FileBrowserViewModel()
+        @StateObject private var rightPane = FileBrowserViewModel()
+        @StateObject private var mtpService = MTPService()
     
     var body: some View {
         HSplitView {
             // Left pane
-            FileBrowserPane(viewModel: leftPane)
+            FileBrowserPane(viewModel: leftPane, mtpService: mtpService)
                 .frame(minWidth: 300)
             
             // Right pane
-            FileBrowserPane(viewModel: rightPane)
+            FileBrowserPane(viewModel: rightPane, mtpService: mtpService)
                 .frame(minWidth: 300)
         }
         .toolbar {

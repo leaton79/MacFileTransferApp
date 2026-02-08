@@ -116,4 +116,33 @@ struct FileItem: Identifiable, Hashable {
             return nil
         }
     }
+    // MARK: - MTP File Initializer
+        
+        /// Create a FileItem from an MTP device file.
+        /// Uses a virtual mtp:// URL scheme so we can identify MTP items later.
+        init(mtpFile: MTPFile, deviceID: String) {
+            let virtualPath = "mtp://\(deviceID)/\(mtpFile.storageID)/\(mtpFile.parentID)/\(mtpFile.name)"
+            self.url = URL(string: virtualPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? virtualPath)
+                   ?? URL(fileURLWithPath: "/mtp-placeholder")
+            self.name = mtpFile.name
+            self.size = Int64(mtpFile.size)
+            self.isDirectory = mtpFile.isDirectory
+            self.modificationDate = mtpFile.modificationDate
+            self.creationDate = mtpFile.modificationDate
+            self.accessDate = mtpFile.modificationDate
+            self.type = nil
+            self.permissions = "---"
+            self.owner = "Android"
+        }
+        
+        /// Whether this item lives on an MTP device
+        var isMTPItem: Bool {
+            url.scheme == "mtp"
+        }
+        
+        /// The MTP object ID stored in this item (only valid for MTP items)
+        var mtpObjectID: UInt32? {
+            // We'll store the object ID in a lookup table managed by the ViewModel
+            nil
+        }
 }

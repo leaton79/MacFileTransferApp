@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum ViewMode {
     case icons
@@ -14,14 +15,19 @@ enum ViewMode {
 /// Single file browser pane with toolbar and view switching
 struct FileBrowserPane: View {
     @ObservedObject var viewModel: FileBrowserViewModel
+    @ObservedObject var mtpService: MTPService
     @State private var viewMode: ViewMode = .list
     @State private var showingNewFolderAlert = false
     @State private var newFolderName = ""
+    @State private var showingRenameAlert = false
+    @State private var renameTarget: FileItem?
+    @State private var renameNewName = ""
+    @State private var isDropTargeted = false
     
     var body: some View {
             HSplitView {
                 // Sidebar
-                SidebarView(viewModel: viewModel)
+                SidebarView(viewModel: viewModel, mtpService: mtpService)
                 
                 // Main content
                 VStack(spacing: 0) {
@@ -45,6 +51,15 @@ struct FileBrowserPane: View {
                         contentView
                     }
                 }
+                .overlay(
+                    // Visual feedback for drop target
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.accentColor, lineWidth: 3)
+                        .opacity(isDropTargeted ? 1 : 0)
+                )
+                .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted) { providers in
+                    handleDrop(providers: providers)
+                }
             }
             .alert("New Folder", isPresented: $showingNewFolderAlert) {
                 TextField("Folder name", text: $newFolderName)
@@ -58,7 +73,51 @@ struct FileBrowserPane: View {
                     }
                 }
             }
+            .alert("Rename", isPresented: $showingRenameAlert) {
+                TextField("New name", text: $renameNewName)
+                Button("Cancel", role: .cancel) {
+                    renameTarget = nil
+                    renameNewName = ""
+                }
+                Button("Rename") {
+                    if let item = renameTarget, !renameNewName.isEmpty {
+                        performRename(item: item, newName: renameNewName)
+                    }
+                    renameTarget = nil
+                    renameNewName = ""
+                }
+            } message: {
+                if let item = renameTarget {
+                    Text("Rename \"\(item.name)\" to:")
+                }
+            }
         }
+    
+    // MARK: - Drop Handling
+    
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        guard !viewModel.isBrowsingMTP else { return false }
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                guard let data = data as? Data,
+                      let sourceURL = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                let destURL = viewModel.currentURL.appendingPathComponent(sourceURL.lastPathComponent)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        if FileManager.default.fileExists(atPath: destURL.path) {
+                            // Skip if already exists at destination
+                            return
+                        }
+                        try FileManager.default.copyItem(at: sourceURL, to: destURL)
+                        DispatchQueue.main.async { viewModel.refresh() }
+                    } catch {
+                        print("Drop copy failed: \(error)")
+                    }
+                }
+            }
+        }
+        return true
+    }
     
     // MARK: - Toolbar
     
@@ -109,7 +168,7 @@ struct FileBrowserPane: View {
                 
                 Spacer()
                 
-                // Action buttons
+                // Action buttons — always visible
                 Button(action: { showingNewFolderAlert = true }) {
                     Image(systemName: "folder.badge.plus")
                 }
@@ -120,12 +179,11 @@ struct FileBrowserPane: View {
                 }
                 .help("Refresh folder contents")
                 
-                if !viewModel.selectedItems.isEmpty {
-                    Button(action: { viewModel.deleteSelected() }) {
-                        Image(systemName: "trash")
-                    }
-                    .help("Move selected items to trash")
+                Button(action: { viewModel.deleteSelected() }) {
+                    Image(systemName: "trash")
                 }
+                .disabled(viewModel.selectedItems.isEmpty)
+                .help("Move selected items to trash")
             }
             .padding(8)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -135,10 +193,12 @@ struct FileBrowserPane: View {
     
     private var addressBar: some View {
         HStack {
-            Image(systemName: "folder")
-                .foregroundColor(.blue)
+            Image(systemName: viewModel.isBrowsingMTP ? "apps.iphone" : "folder")
+                .foregroundColor(viewModel.isBrowsingMTP ? .green : .blue)
             
-            Text(viewModel.currentURL.path)
+            Text(viewModel.isBrowsingMTP
+                 ? (viewModel.currentMTPDevice?.displayName ?? "Android Device")
+                 : viewModel.currentURL.path)
                 .font(.system(.body, design: .monospaced))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -169,34 +229,44 @@ struct FileBrowserPane: View {
             FileIconView(
                 items: viewModel.items,
                 selectedItems: viewModel.selectedItems,
-                onSelect: { viewModel.toggleSelection($0) },
-                onOpen: { handleOpen($0) }
+                onSelect: { item, addToSelection in
+                    viewModel.selectItem(item, addToSelection: addToSelection)
+                },
+                onOpen: { handleOpen($0) },
+                onDelete: { handleDelete($0) },
+                onRename: { handleRenameRequest($0) }
             )
             
         case .list:
             FileListView(
                 items: viewModel.items,
                 selectedItems: viewModel.selectedItems,
-                onSelect: { viewModel.toggleSelection($0) },
-                onOpen: { handleOpen($0) }
+                onSelect: { item, addToSelection in
+                    viewModel.selectItem(item, addToSelection: addToSelection)
+                },
+                onOpen: { handleOpen($0) },
+                onDelete: { handleDelete($0) },
+                onRename: { handleRenameRequest($0) }
             )
             
         case .details:
-                    FileDetailsView(
-                        items: viewModel.items,
-                        selectedItems: viewModel.selectedItems,
-                        onSelect: { viewModel.toggleSelection($0) },
-                        onOpen: { handleOpen($0) }
-                    )
+            FileDetailsView(
+                items: viewModel.items,
+                selectedItems: viewModel.selectedItems,
+                onSelect: { viewModel.toggleSelection($0) },
+                onOpen: { handleOpen($0) },
+                onDelete: { handleDelete($0) },
+                onRename: { handleRenameRequest($0) }
+            )
         }
     }
     
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "folder")
+            Image(systemName: viewModel.isBrowsingMTP ? "apps.iphone" : "folder")
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
-            Text("This folder is empty")
+            Text(viewModel.isBrowsingMTP ? "No files found on device" : "This folder is empty")
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -205,11 +275,47 @@ struct FileBrowserPane: View {
     // MARK: - Actions
     
     private func handleOpen(_ item: FileItem) {
-        if item.isDirectory {
-            viewModel.navigate(to: item.url)
+        if viewModel.isBrowsingMTP {
+            if item.isDirectory {
+                viewModel.navigateIntoMTPFolder(item)
+            }
         } else {
-            // Open file with default app
-            NSWorkspace.shared.open(item.url)
+            if item.isDirectory {
+                viewModel.navigate(to: item.url)
+            } else {
+                NSWorkspace.shared.open(item.url)
+            }
+        }
+    }
+    
+    private func handleDelete(_ item: FileItem) {
+        if viewModel.isBrowsingMTP {
+            // MTP delete — future enhancement
+        } else {
+            do {
+                try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+                viewModel.selectedItems.remove(item)
+                viewModel.refresh()
+            } catch {
+                viewModel.errorMessage = "Failed to delete \(item.name): \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    private func handleRenameRequest(_ item: FileItem) {
+        renameTarget = item
+        renameNewName = item.name
+        showingRenameAlert = true
+    }
+    
+    private func performRename(item: FileItem, newName: String) {
+        guard !viewModel.isBrowsingMTP else { return }
+        let newURL = item.url.deletingLastPathComponent().appendingPathComponent(newName)
+        do {
+            try FileManager.default.moveItem(at: item.url, to: newURL)
+            viewModel.refresh()
+        } catch {
+            viewModel.errorMessage = "Failed to rename: \(error.localizedDescription)"
         }
     }
 }
